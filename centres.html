@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Mapa de centres i cases</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{ --ink:#1f2328; --muted:#5d6670; --panel:rgba(255,255,255,.95); --line:#e3e1dc; }
+  html,body{height:100%;margin:0;background:#eae7e1;
+    font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  #map{position:absolute;inset:0}
+  .panel{position:absolute;z-index:500;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+  #legend{top:10px;right:10px;padding:8px 10px;max-width:220px}
+  #legend b{display:block;font-size:13px;margin-bottom:4px}
+  #legend label{display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer;user-select:none;font-size:13px}
+  #legend label.off{opacity:.4}
+  #legend input{display:none}
+  #legend .n{margin-left:auto;color:var(--muted);font-size:12px;padding-left:8px}
+  #legend .tools{display:flex;gap:6px;margin-top:6px;border-top:1px solid var(--line);padding-top:6px}
+  #legend button{font:inherit;font-size:12px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 7px;cursor:pointer}
+  #legend .toggle{display:none}
+  .mk{width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+    display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);position:relative}
+  .mk svg{transform:rotate(45deg);width:14px;height:14px;fill:#fff}
+  .mk .c{position:absolute;top:-7px;right:-9px;transform:rotate(45deg);background:#fff;color:#1f2328;
+    font:700 10px/14px system-ui,sans-serif;min-width:14px;height:14px;border-radius:7px;text-align:center;padding:0 2px;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+  .sw{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none}
+  .sw svg{width:10px;height:10px;fill:#fff}
+  .leaflet-div-icon{background:none;border:none}
+  .pop .r{display:flex;gap:7px;align-items:flex-start;padding:4px 0;border-top:1px solid var(--line)}
+  .pop .r:first-child{border-top:none}
+  .pop .t{font-weight:600}
+  .pop .d{color:var(--muted);font-size:12.5px}
+  .pop a{color:#b4441c;font-weight:600;text-decoration:none;display:inline-block;margin-top:6px}
+  @media (max-width:520px){
+    #legend{top:auto;bottom:22px;right:10px;max-width:calc(100% - 20px)}
+    #legend .body{display:none} #legend.open .body{display:block}
+    #legend .toggle{display:block}
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="legend" class="panel">
+  <button class="toggle" onclick="this.parentNode.classList.toggle('open')">Llegenda ▾</button>
+  <div class="body"><b id="ttl">Centres i cases</b><div id="cats"></div>
+    <div class="tools"><button id="all">Tots</button><button id="none">Cap</button></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/*
+  Dades al hash de la URL:  #p=<registre>;<registre>;...
+  Registre: nom|categoria|lat|lon|detall   (camps codificats amb EncodeForUrl)
+  Categories: sv, sf, cgi, igl, sss, casa  (qualsevol altra surt com «altres»)
+*/
+const ICON = {
+  house:'<svg viewBox="0 0 24 24"><path d="M12 3 2 11h3v9h5v-6h4v6h5v-9h3z"/></svg>',
+  bldg:'<svg viewBox="0 0 24 24"><path d="M4 21V4l8-2 8 2v17h-6v-5h-4v5zM8 7v2h2V7zm6 0v2h2V7zM8 11v2h2v-2zm6 0v2h2v-2z"/></svg>',
+  cap:'<svg viewBox="0 0 24 24"><path d="M12 3 1 9l11 6 9-4.9V17h2V9zM5 13.2V17l7 4 7-4v-3.8L12 17z"/></svg>',
+  cross:'<svg viewBox="0 0 24 24"><path d="M10 2h4v6h6v4h-6v10h-4V12H4V8h6z"/></svg>',
+  star:'<svg viewBox="0 0 24 24"><path d="m12 2 3 7h7l-5.5 4.5L18.5 21 12 16.8 5.5 21l2-7.5L2 9h7z"/></svg>',
+  dot:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>'
+};
+const CATS = [
+  {k:'sv',   label:'sv',   color:'#c62828', icon:'bldg'},
+  {k:'sf',   label:'sf',   color:'#1565c0', icon:'bldg'},
+  {k:'cgi',  label:'cgi',  color:'#6a1b9a', icon:'cap'},
+  {k:'igl',  label:'igl',  color:'#c79100', icon:'cross'},
+  {k:'sss',  label:'sss',  color:'#2e7d32', icon:'star'},
+  {k:'casa', label:'Cases (activitats)', color:'#37474f', icon:'house'},
+  {k:'x',    label:'altres', color:'#78909c', icon:'dot'}
+];
+const CAT = Object.fromEntries(CATS.map(c => [c.k, c]));
+const ORDER = CATS.map(c => c.k);
+
+const map = L.map('map').setView([41.75, 1.6], 8);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dec = s => { try { return decodeURIComponent((s||'').replace(/\+/g,' ')).trim(); } catch(e){ return (s||'').trim(); } };
+const num = s => { const v = parseFloat(String(s).replace(',', '.')); return isFinite(v) ? v : null; };
+const sw = c => `<span class="sw" style="background:${c.color}">${ICON[c.icon]}</span>`;
+
+let rows = [], visible = new Set(ORDER), layer = L.layerGroup().addTo(map), fitted = false;
+
+function parse(){
+  const h = location.hash.replace(/^#/, ''); const params = {};
+  h.split('&').forEach(kv => { const i = kv.indexOf('='); if (i>0) params[kv.slice(0,i)] = kv.slice(i+1); });
+  rows = (params.p || '').split(';').filter(Boolean).map(r => {
+    const f = r.split('|').map(dec);
+    const k = (f[1]||'').toLowerCase();
+    return { nom:f[0]||'', cat: CAT[k] ? k : 'x', lat:num(f[2]), lon:num(f[3]), det:f[4]||'' };
+  }).filter(r => r.lat !== null && r.lon !== null);
+  if (params.t) document.getElementById('ttl').textContent = dec(params.t);
+}
+
+function legend(){
+  const counts = {}; rows.forEach(r => counts[r.cat] = (counts[r.cat]||0) + 1);
+  document.getElementById('cats').innerHTML = CATS.filter(c => counts[c.k]).map(c =>
+    `<label class="${visible.has(c.k)?'':'off'}" data-k="${c.k}">${sw(c)}<span>${esc(c.label)}</span><span class="n">${counts[c.k]}</span></label>`).join('');
+  document.querySelectorAll('#cats label').forEach(l => l.onclick = () => {
+    const k = l.dataset.k; visible.has(k) ? visible.delete(k) : visible.add(k); draw(); legend(); });
+}
+
+function draw(){
+  layer.clearLayers();
+  const pts = new Map();
+  rows.filter(r => visible.has(r.cat)).forEach(r => {
+    const key = r.lat.toFixed(5)+','+r.lon.toFixed(5);
+    if (!pts.has(key)) pts.set(key, {lat:r.lat, lon:r.lon, items:[]});
+    pts.get(key).items.push(r);
+  });
+  const bounds = [];
+  pts.forEach(p => {
+    p.items.sort((a,b) => ORDER.indexOf(a.cat) - ORDER.indexOf(b.cat) || a.nom.localeCompare(b.nom));
+    const c = CAT[p.items[0].cat];
+    const count = p.items.length > 1 ? `<span class="c">${p.items.length}</span>` : '';
+    const icon = L.divIcon({ className:'', iconSize:[26,26], iconAnchor:[13,30], popupAnchor:[0,-28],
+      html:`<div class="mk" style="background:${c.color}">${ICON[c.icon]}${count}</div>` });
+    const gmaps = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
+    const pop = `<div class="pop">` + p.items.map(it => `<div class="r">${sw(CAT[it.cat])}<div><div class="t">${esc(it.nom)}</div>` +
+      (it.det ? `<div class="d">${esc(it.det)}</div>` : '') + `</div></div>`).join('') +
+      `<a href="${gmaps}" target="_blank" rel="noopener">Obre a Google Maps ↗</a></div>`;
+    L.marker([p.lat, p.lon], { icon, title: p.items.map(i => i.nom).join(' · ') })
+      .bindPopup(pop, { maxWidth: 280, maxHeight: 320 }).addTo(layer);
+    bounds.push([p.lat, p.lon]);
+  });
+  if (!fitted && bounds.length) { map.fitBounds(bounds, { padding:[40,40], maxZoom: 13 }); fitted = true; }
+}
+
+document.getElementById('all').onclick = () => { visible = new Set(ORDER); draw(); legend(); };
+document.getElementById('none').onclick = () => { visible = new Set(); draw(); legend(); };
+function render(){ parse(); fitted = false; legend(); draw(); }
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>
