@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Mapa · Qui és fora</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --ink:#1f2328; --muted:#5d6670; --bg:#ffffff; --panel:rgba(255,255,255,.94);
+    --accent:#b4441c; --accent-ink:#ffffff; --line:#e3e1dc; --chip:#fff4ee;
+  }
+  html,body{height:100%;margin:0;background:#eae7e1;
+    font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  #map{position:absolute;inset:0}
+  .panel{position:absolute;z-index:500;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.08);backdrop-filter:blur(4px)}
+  #head{top:10px;left:56px;right:10px;max-width:420px;padding:8px 12px}
+  #head b{font-size:15px}
+  #head .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  #nowhere{bottom:22px;left:10px;max-width:300px;max-height:40%;overflow:auto;padding:8px 12px;font-size:12.5px}
+  #nowhere h4{margin:0 0 4px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  #nowhere div{padding:2px 0}
+  #nowhere span{color:var(--muted)}
+  .pin{display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);
+    position:absolute;left:0;top:0;pointer-events:auto}
+  .pin .chips{display:flex;flex-wrap:wrap;gap:3px;justify-content:center;max-width:150px;
+    background:var(--accent);padding:4px 5px;border-radius:9px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .pin .chip{background:var(--accent-ink);color:var(--accent);font-weight:700;font-size:11px;
+    padding:1px 5px;border-radius:5px;letter-spacing:.02em;white-space:nowrap}
+  .pin .stem{width:2px;height:9px;background:var(--accent)}
+  .pin .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);border:2px solid #fff;
+    box-shadow:0 0 0 1px var(--accent);margin-top:-1px}
+  .leaflet-div-icon{background:none;border:none}
+  .pop h3{margin:0 0 6px;font-size:14px}
+  .pop .m{padding:5px 0;border-top:1px solid var(--line)}
+  .pop .m:first-of-type{border-top:none}
+  .pop .n{font-weight:600}
+  .pop .d{color:var(--muted);font-size:12.5px}
+  .pop a{color:var(--accent);font-weight:600;text-decoration:none;display:inline-block;margin-top:6px}
+  #empty{top:50%;left:50%;transform:translate(-50%,-50%);padding:14px 18px;text-align:center;color:var(--muted)}
+  @media (max-width:520px){ #head{left:52px} #nowhere{max-width:calc(100% - 20px)} }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="head" class="panel"><b id="title">Qui és fora</b><div class="sub" id="sub"></div></div>
+<div id="nowhere" class="panel" hidden></div>
+<div id="empty" class="panel" hidden>Cap mossèn fora en una casa coneguda.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/*
+  Dades al hash de la URL (no s'envien mai al servidor):
+    #d=<data>&p=<registre>;<registre>;...
+  Cada registre: casa|lat|lon|inicials|nom|activitat|dates|ctr
+  Cada camp va codificat amb EncodeForUrl / encodeURIComponent.
+  Si lat/lon són buits, el mossèn surt a «Sense ubicació al mapa».
+*/
+const map = L.map('map', {zoomControl:true, attributionControl:true}).setView([41.75, 1.6], 8);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19, subdomains:'abcd',
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · &copy; <a href="https://carto.com/attributions">CARTO</a>'
+}).addTo(map);
+let layer = L.layerGroup().addTo(map);
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dec = s => { try { return decodeURIComponent((s||'').replace(/\+/g,' ')).trim(); } catch(e){ return (s||'').trim(); } };
+const num = s => { const v = parseFloat(String(s).replace(',', '.')); return isFinite(v) ? v : null; };
+
+function initialsFrom(name){
+  // "Cognom1 Cognom2, Mn. Nom" -> N + C1 + C2
+  const [sur, giv=''] = name.split(',');
+  const g = giv.replace(/\b(Mn|Dr|D|Fr|Rev|P)\.\s*/g,'').trim().split(/\s+/)[0] || '';
+  const s = sur.trim().split(/\s+/).filter(w => !/^(de|del|la|i|y)$/i.test(w));
+  return ((g[0]||'') + s.map(w => w[0]).join('')).toUpperCase().slice(0,4) || '?';
+}
+
+function parse(){
+  const h = location.hash.replace(/^#/, '');
+  const params = {};
+  h.split('&').forEach(kv => { const i = kv.indexOf('='); if (i>0) params[kv.slice(0,i)] = kv.slice(i+1); });
+  const rows = (params.p || '').split(';').filter(Boolean).map(r => {
+    const f = r.split('|').map(dec);
+    return { casa:f[0]||'', lat:num(f[1]), lon:num(f[2]), ini:f[3]||'', nom:f[4]||'', act:f[5]||'', dates:f[6]||'', ctr:f[7]||'' };
+  });
+  return { date: dec(params.d || ''), rows };
+}
+
+function render(){
+  layer.clearLayers();
+  const { date, rows } = parse();
+  const placed = rows.filter(r => r.lat !== null && r.lon !== null);
+  const nowhere = rows.filter(r => r.lat === null || r.lon === null);
+
+  document.getElementById('title').textContent = date ? `Qui és fora · ${date}` : 'Qui és fora';
+  const n = rows.length;
+  document.getElementById('sub').textContent =
+    n === 0 ? 'Cap mossèn fora' :
+    `${n} ${n===1?'mossèn fora':'mossens fora'} · ${placed.length} al mapa` +
+    (nowhere.length ? ` · ${nowhere.length} sense ubicació` : '');
+
+  // Agrupa per casa
+  const houses = new Map();
+  placed.forEach(r => {
+    if (!houses.has(r.casa)) houses.set(r.casa, { casa:r.casa, lat:r.lat, lon:r.lon, people:[] });
+    houses.get(r.casa).people.push(r);
+  });
+
+  // Cases diferents al mateix punt (p. ex. les de Torreciudad): les separa una mica en cercle
+  const byPoint = new Map();
+  houses.forEach(h => { const k = h.lat.toFixed(4)+','+h.lon.toFixed(4); (byPoint.get(k) || byPoint.set(k,[]).get(k)).push(h); });
+  byPoint.forEach(list => {
+    if (list.length < 2) return;
+    const R = 0.0022; // ~200 m
+    list.sort((a,b) => a.casa.localeCompare(b.casa)).forEach((h,i) => {
+      const a = (2*Math.PI*i)/list.length - Math.PI/2;
+      h.dlat = h.lat + R*Math.sin(a);
+      h.dlon = h.lon + R*Math.cos(a)/Math.cos(h.lat*Math.PI/180);
+    });
+  });
+
+  const bounds = [];
+  houses.forEach(h => {
+    const lat = h.dlat ?? h.lat, lon = h.dlon ?? h.lon;
+    const chips = h.people.map(p => `<span class="chip" title="${esc(p.nom)}">${esc(p.ini || initialsFrom(p.nom))}</span>`).join('');
+    const icon = L.divIcon({ className:'', iconSize:[0,0],
+      html:`<div class="pin"><div class="chips">${chips}</div><div class="stem"></div><div class="dot"></div></div>` });
+    const gmaps = `https://www.google.com/maps/search/?api=1&query=${h.lat},${h.lon}`;
+    const pop = `<div class="pop"><h3>📍 ${esc(h.casa)}</h3>` +
+      h.people.map(p => `<div class="m"><div class="n">${esc(p.nom)}</div>` +
+        `<div class="d">${esc(p.act)}${p.ctr ? ' · ctr: '+esc(p.ctr) : ''}</div>` +
+        (p.dates ? `<div class="d">📅 ${esc(p.dates)}</div>` : '') + `</div>`).join('') +
+      `<a href="${gmaps}" target="_blank" rel="noopener">Obre a Google Maps ↗</a></div>`;
+    L.marker([lat, lon], { icon, title: h.casa }).bindPopup(pop, { maxWidth: 280 }).addTo(layer);
+    bounds.push([lat, lon]);
+  });
+
+  if (bounds.length === 1) map.setView(bounds[0], 11);
+  else if (bounds.length > 1) map.fitBounds(bounds, { padding:[60,60], maxZoom: 11 });
+  else map.setView([41.75, 1.6], 8);
+
+  const nw = document.getElementById('nowhere');
+  if (nowhere.length) {
+    nw.hidden = false;
+    nw.innerHTML = '<h4>Sense ubicació al mapa</h4>' + nowhere.map(p =>
+      `<div><b>${esc(p.ini || initialsFrom(p.nom))}</b> ${esc(p.nom)}<br><span>${esc(p.act)}${p.casa ? ' · '+esc(p.casa)+' (casa sense coordenades)' : ''}</span></div>`).join('');
+  } else nw.hidden = true;
+
+  document.getElementById('empty').hidden = rows.length !== 0;
+}
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>
