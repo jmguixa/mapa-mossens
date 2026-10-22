@@ -35,6 +35,19 @@
   .cl{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;
     font:700 13px/1 system-ui,sans-serif;color:#1f2328;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.35)}
   .cl span{width:28px;height:28px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center}
+  /* aura neó per als llocs amb activitat */
+  @keyframes neon{0%,100%{box-shadow:0 0 6px 2px #39ff14,0 0 14px 6px rgba(57,255,20,.55)}50%{box-shadow:0 0 10px 4px #39ff14,0 0 24px 10px rgba(57,255,20,.35)}}
+  .mk.hot{animation:neon 1.6s ease-in-out infinite;border-color:#39ff14}
+  .cl.hot{animation:neon 1.6s ease-in-out infinite}
+  .pop{min-width:200px}
+  .pop .info{margin-top:3px;font-size:12.5px}
+  .pop .info div{padding:1px 0}
+  .pop .info b{font-weight:600;color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;margin-right:4px}
+  .pop .act{margin-top:5px;padding:5px 7px;border-radius:6px;background:#effde9;border-left:3px solid #2bbd0f;font-size:12.5px}
+  .pop .act div{padding:1px 0}
+  .pop .act .h{font-weight:700;color:#1b7a07;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+  #date{position:absolute;z-index:500;top:10px;left:56px;padding:6px 10px;font-size:13px}
+  #date:empty{display:none}
   .pop .r{display:flex;gap:7px;align-items:flex-start;padding:4px 0;border-top:1px solid var(--line)}
   .pop .r:first-child{border-top:none}
   .pop .t{font-weight:600}
@@ -49,6 +62,7 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="date" class="panel"></div>
 <div id="legend" class="panel">
   <button class="toggle" onclick="this.parentNode.classList.toggle('open')">Llegenda ▾</button>
   <div class="body"><b id="ttl">Centres i cases</b><div id="cats"></div>
@@ -60,7 +74,10 @@
 <script>
 /*
   Dades al hash de la URL:  #p=<registre>;<registre>;...
-  Registre: nom|categoria|lat|lon|detall   (camps codificats amb EncodeForUrl)
+  Registre: nom|categoria|lat|lon|detall|fitxa|activitat   (camps codificats amb EncodeForUrl)
+    fitxa: línies "Càrrec: Nom" separades per salt de línia
+    activitat: línies d'activitat del dia (si n'hi ha, el pin brilla amb aura neó)
+  #d=<data> opcional, es mostra a dalt.
   Categories: sv, sf, cgi, igl, sss, casa  (qualsevol altra surt com «altres»)
 */
 const ICON = {
@@ -100,11 +117,12 @@ const layer = L.markerClusterGroup({
     // anell de colors proporcional als tipus que hi ha dins la bombolla
     const counts = {}; let total = 0;
     cl.getAllChildMarkers().forEach(m => (m.options.cats||[]).forEach(k => { counts[k]=(counts[k]||0)+1; total++; }));
+    const hot = cl.getAllChildMarkers().some(m => m.options.hot);
     let acc = 0; const stops = ORDER.filter(k => counts[k]).map(k => {
       const a = acc/total*360; acc += counts[k]; const b = acc/total*360;
       return `${CAT[k].color} ${a}deg ${b}deg`; }).join(',');
     return L.divIcon({ className:'', iconSize:[40,40],
-      html:`<div class="cl" style="background:conic-gradient(${stops})"><span>${total}</span></div>` });
+      html:`<div class="cl${hot?' hot':''}" style="background:conic-gradient(${stops})"><span>${total}</span></div>` });
   }
 }).addTo(map);
 
@@ -114,9 +132,11 @@ function parse(){
   rows = (params.p || '').split(';').filter(Boolean).map(r => {
     const f = r.split('|').map(dec);
     const k = (f[1]||'').toLowerCase();
-    return { nom:f[0]||'', cat: CAT[k] ? k : 'x', lat:num(f[2]), lon:num(f[3]), det:f[4]||'' };
+    const lines = t => (t||'').split(/\n/).map(x => x.trim()).filter(Boolean);
+    return { nom:f[0]||'', cat: CAT[k] ? k : 'x', lat:num(f[2]), lon:num(f[3]), det:f[4]||'', info:lines(f[5]), act:lines(f[6]) };
   }).filter(r => r.lat !== null && r.lon !== null);
   if (params.t) document.getElementById('ttl').textContent = dec(params.t);
+  document.getElementById('date').textContent = params.d ? `🧳 Activitats del ${dec(params.d)}` : '';
 }
 
 function legend(){
@@ -140,13 +160,19 @@ function draw(){
     p.items.sort((a,b) => ORDER.indexOf(a.cat) - ORDER.indexOf(b.cat) || a.nom.localeCompare(b.nom));
     const c = CAT[p.items[0].cat];
     const count = p.items.length > 1 ? `<span class="c">${p.items.length}</span>` : '';
+    const hot = p.items.some(it => it.act.length);
     const icon = L.divIcon({ className:'', iconSize:[26,26], iconAnchor:[13,30], popupAnchor:[0,-28],
-      html:`<div class="mk" style="background:${c.color}">${ICON[c.icon]}${count}</div>` });
+      html:`<div class="mk${hot?' hot':''}" style="background:${c.color}">${ICON[c.icon]}${count}</div>` });
     const gmaps = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
+    const infoHtml = arr => arr.map(l => { const i = l.indexOf(':');
+      return i > 0 ? `<div><b>${esc(l.slice(0,i))}</b>${esc(l.slice(i+1).trim())}</div>` : `<div>${esc(l)}</div>`; }).join('');
     const pop = `<div class="pop">` + p.items.map(it => `<div class="r">${sw(CAT[it.cat])}<div><div class="t">${esc(it.nom)}</div>` +
-      (it.det ? `<div class="d">${esc(it.det)}</div>` : '') + `</div></div>`).join('') +
+      (it.det ? `<div class="d">${esc(it.det)}</div>` : '') +
+      (it.info.length ? `<div class="info">${infoHtml(it.info)}</div>` : '') +
+      (it.act.length ? `<div class="act"><div class="h">🧳 Activitat</div>${it.act.map(a => `<div>${esc(a)}</div>`).join('')}</div>` : '') +
+      `</div></div>`).join('') +
       `<a href="${gmaps}" target="_blank" rel="noopener">Obre a Google Maps ↗</a></div>`;
-    L.marker([p.lat, p.lon], { icon, cats: p.items.map(i => i.cat), title: p.items.map(i => i.nom).join(' · ') })
+    L.marker([p.lat, p.lon], { icon, hot, cats: p.items.map(i => i.cat), title: p.items.map(i => i.nom).join(' · ') })
       .bindPopup(pop, { maxWidth: 280, maxHeight: 320 }).addTo(layer);
     bounds.push([p.lat, p.lon]);
   });
