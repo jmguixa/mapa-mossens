@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<meta name="referrer" content="no-referrer">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Mapa · Qui és fora</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
@@ -34,7 +34,8 @@
   .pin .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);border:2px solid #fff;
     box-shadow:0 0 0 1px var(--accent);margin-top:-1px}
   .leaflet-div-icon{background:none;border:none}
-  .pop h3{margin:0 0 6px;font-size:14px}
+  .pop h3{margin:8px 0 4px;font-size:14px}
+  .pop h3:first-child{margin-top:0}
   .pop .m{padding:5px 0;border-top:1px solid var(--line)}
   .pop .m:first-of-type{border-top:none}
   .pop .n{font-weight:600}
@@ -60,9 +61,9 @@
   Si lat/lon són buits, el mossèn surt a «Sense ubicació al mapa».
 */
 const map = L.map('map', {zoomControl:true, attributionControl:true}).setView([41.75, 1.6], 8);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19, subdomains:'abcd',
-  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · &copy; <a href="https://carto.com/attributions">CARTO</a>'
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
 let layer = L.layerGroup().addTo(map);
 
@@ -102,40 +103,32 @@ function render(){
     `${n} ${n===1?'mossèn fora':'mossens fora'} · ${placed.length} al mapa` +
     (nowhere.length ? ` · ${nowhere.length} sense ubicació` : '');
 
-  // Agrupa per casa
-  const houses = new Map();
+  // Agrupa per punt: cases diferents al mateix lloc (p. ex. les de Torreciudad) comparteixen pin
+  const points = new Map();
   placed.forEach(r => {
-    if (!houses.has(r.casa)) houses.set(r.casa, { casa:r.casa, lat:r.lat, lon:r.lon, people:[] });
-    houses.get(r.casa).people.push(r);
-  });
-
-  // Cases diferents al mateix punt (p. ex. les de Torreciudad): les separa una mica en cercle
-  const byPoint = new Map();
-  houses.forEach(h => { const k = h.lat.toFixed(4)+','+h.lon.toFixed(4); (byPoint.get(k) || byPoint.set(k,[]).get(k)).push(h); });
-  byPoint.forEach(list => {
-    if (list.length < 2) return;
-    const R = 0.0022; // ~200 m
-    list.sort((a,b) => a.casa.localeCompare(b.casa)).forEach((h,i) => {
-      const a = (2*Math.PI*i)/list.length - Math.PI/2;
-      h.dlat = h.lat + R*Math.sin(a);
-      h.dlon = h.lon + R*Math.cos(a)/Math.cos(h.lat*Math.PI/180);
-    });
+    const k = r.lat.toFixed(4) + ',' + r.lon.toFixed(4);
+    if (!points.has(k)) points.set(k, { lat:r.lat, lon:r.lon, houses:new Map() });
+    const hs = points.get(k).houses;
+    if (!hs.has(r.casa)) hs.set(r.casa, []);
+    hs.get(r.casa).push(r);
   });
 
   const bounds = [];
-  houses.forEach(h => {
-    const lat = h.dlat ?? h.lat, lon = h.dlon ?? h.lon;
-    const chips = h.people.map(p => `<span class="chip" title="${esc(p.nom)}">${esc(p.ini || initialsFrom(p.nom))}</span>`).join('');
+  points.forEach(pt => {
+    const people = [...pt.houses.values()].flat();
+    const names = [...pt.houses.keys()];
+    const chips = people.map(p => `<span class="chip" title="${esc(p.nom)} · ${esc(p.casa)}">${esc(p.ini || initialsFrom(p.nom))}</span>`).join('');
     const icon = L.divIcon({ className:'', iconSize:[0,0],
       html:`<div class="pin"><div class="chips">${chips}</div><div class="stem"></div><div class="dot"></div></div>` });
-    const gmaps = `https://www.google.com/maps/search/?api=1&query=${h.lat},${h.lon}`;
-    const pop = `<div class="pop"><h3>📍 ${esc(h.casa)}</h3>` +
-      h.people.map(p => `<div class="m"><div class="n">${esc(p.nom)}</div>` +
-        `<div class="d">${esc(p.act)}${p.ctr ? ' · ctr: '+esc(p.ctr) : ''}</div>` +
-        (p.dates ? `<div class="d">📅 ${esc(p.dates)}</div>` : '') + `</div>`).join('') +
+    const gmaps = `https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lon}`;
+    const pop = `<div class="pop">` +
+      names.map(casa => `<h3>📍 ${esc(casa)}</h3>` +
+        pt.houses.get(casa).map(p => `<div class="m"><div class="n">${esc(p.nom)}</div>` +
+          `<div class="d">${esc(p.act)}${p.ctr ? ' · ctr: '+esc(p.ctr) : ''}</div>` +
+          (p.dates ? `<div class="d">📅 ${esc(p.dates)}</div>` : '') + `</div>`).join('')).join('') +
       `<a href="${gmaps}" target="_blank" rel="noopener">Obre a Google Maps ↗</a></div>`;
-    L.marker([lat, lon], { icon, title: h.casa }).bindPopup(pop, { maxWidth: 280 }).addTo(layer);
-    bounds.push([lat, lon]);
+    L.marker([pt.lat, pt.lon], { icon, title: names.join(' · ') }).bindPopup(pop, { maxWidth: 280, maxHeight: 320 }).addTo(layer);
+    bounds.push([pt.lat, pt.lon]);
   });
 
   if (bounds.length === 1) map.setView(bounds[0], 11);
